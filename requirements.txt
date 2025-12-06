@@ -1,4 +1,5 @@
 Flask
+Flask-Bootstrap
 gunicorn
 python-dotenv
 psycopg2-binary
