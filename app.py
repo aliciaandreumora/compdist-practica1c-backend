@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 from flask import Flask, redirect, request, make_response, jsonify
 from flask_bootstrap import Bootstrap
 from flask_cors import CORS
-from flask_jwt_extended import (JWTManager, create_access_token, set_access_cookies,
-                                unset_jwt_cookies, jwt_required, get_jwt_identity)
+from flask_jwt_extended import (
+    JWTManager, create_access_token, set_access_cookies,
+    unset_jwt_cookies, jwt_required, get_jwt_identity
+)
 from extensions import db
 print("DB instance in app.py:", id(db))
 
@@ -14,41 +16,51 @@ def create_app():
     env_dir = path.join(basedir, '.env')
     load_dotenv(env_dir)
 
-    c_app = Flask(__name__, '/static')
-    c_app.secret_key = getenv('SECRET_KEY')
-    c_app.config['SQLALCHEMY_DATABASE_URI'] = getenv('DATABASE_URL')
+    c_app = Flask(__name__, static_url_path="/static")
+
+    c_app.secret_key = getenv('SECRET_KEY', 'dev-secret-key')
+
+    # 🔹 Config de BD:
+    # 1) Mirar primero variables de entorno (DATABASE_URL o SQLALCHEMY_DATABASE_URI)
+    # 2) Si no hay nada, usar una SQLite local (games.db)
+    db_url = getenv('DATABASE_URL') or getenv('SQLALCHEMY_DATABASE_URI')
+    if not db_url:
+        db_path = path.join(basedir, 'games.db')
+        db_url = 'sqlite:///' + db_path
+
+    c_app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+    c_app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     db.init_app(c_app)
 
-    c_app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
+    # 🔹 Bootstrap
     Bootstrap(c_app)
 
-    c_app.config["JWT_SECRET_KEY"] = getenv('JWT_SECRET_KEY')
+    # 🔹 Config JWT
+    c_app.config["JWT_SECRET_KEY"] = getenv('JWT_SECRET_KEY', 'dev-jwt-secret')
     c_app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-    c_app.config["JWT_COOKIE_SECURE"] = False
+    c_app.config["JWT_COOKIE_SECURE"] = False  # en HTTPS/producción debería ser True
     c_app.config["JWT_COOKIE_SAMESITE"] = "Lax"
     c_app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
-    CORS(c_app,
-     resources={r"/*": {"origins": [
-         "http://localhost:5173",
-         "http://localhost:5174",
-         "http://127.0.0.1:5173",
-         "http://127.0.0.1:5174"
-     ]}},
-     supports_credentials=True,
-     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-     allow_headers=["Content-Type", "Authorization", "X-Requested-With"])
-
-
-
-    #CORS(app,
-    #     origins=["http://localhost:5173"],
-    #     supports_credentials=True)
+    # 🔹 CORS: de momento dejamos los localhost.
+    # Más tarde añadimos tu GitHub Pages.
+    CORS(
+        c_app,
+        resources={r"/*": {"origins": [
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+        ]}},
+        supports_credentials=True,
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    )
 
     jwt = JWTManager(c_app)
 
     return c_app, db
+
 
 
 app, db = create_app()
