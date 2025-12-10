@@ -10,7 +10,6 @@ from flask_jwt_extended import (
 from extensions import db
 print("DB instance in app.py:", id(db))
 
-
 def create_app():
     basedir = path.abspath(path.dirname(__file__))
     env_dir = path.join(basedir, '.env')
@@ -18,11 +17,10 @@ def create_app():
 
     c_app = Flask(__name__, static_url_path="/static")
 
+    # Clave secreta
     c_app.secret_key = getenv('SECRET_KEY', 'dev-secret-key')
 
-    # 🔹 Config de BD:
-    # 1) Mirar primero variables de entorno (DATABASE_URL o SQLALCHEMY_DATABASE_URI)
-    # 2) Si no hay nada, usar una SQLite local (games.db)
+    # --------- BD ----------
     db_url = getenv('DATABASE_URL') or getenv('SQLALCHEMY_DATABASE_URI')
     if not db_url:
         db_path = path.join(basedir, 'games.db')
@@ -32,37 +30,35 @@ def create_app():
     c_app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     db.init_app(c_app)
 
-    # 🔹 Bootstrap
+    # Bootstrap
     Bootstrap(c_app)
 
-    # 🔹 Config JWT
-        # 🔹 Config JWT
+    # --------- JWT ----------
     c_app.config["JWT_SECRET_KEY"] = getenv('JWT_SECRET_KEY', 'dev-jwt-secret')
 
     # Cookies JWT entre dominios (GitHub Pages -> Render)
     c_app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-    c_app.config["JWT_COOKIE_SECURE"] = True      # requiere HTTPS (Render lo tiene)
-    c_app.config["JWT_COOKIE_SAMESITE"] = "None"  # permite cookies cross-site
+    c_app.config["JWT_COOKIE_SECURE"] = True       # HTTPS (Render)
+    c_app.config["JWT_COOKIE_SAMESITE"] = "None"   # cross-site
     c_app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
-    # 🔹 CORS: añadimos GitHub Pages
+    # --------- CORS ----------
+    from flask_cors import CORS
     CORS(
-    c_app,
-    resources={r"/*": {"origins": [
-        "https://aliciaandreumora.github.io",  # GitHub Pages
-        "http://localhost:5173",               # dev local
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-    ]}},
-    supports_credentials=True,
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+        c_app,
+        origins=[
+            "https://aliciaandreumora.github.io",  # GitHub Pages
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+        ],
+        supports_credentials=True,
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
     )
 
-
     jwt = JWTManager(c_app)
-
     return c_app, db
 
 
@@ -100,11 +96,11 @@ def logout_user():
     return resp
 
 
-
 @app.route('/register', methods=['POST', 'OPTIONS'])
 def register_user():
     print('REGISTER')
     if request.method == "OPTIONS":
+        # respuesta vacía para el preflight
         return make_response("", 204)
 
     data = request.get_json()
@@ -188,6 +184,9 @@ def eliminar_juego(id):
     ret, codigo = games.eliminar_juego(id)
     return ret, codigo
 
+@app.route("/")
+def index():
+    return jsonify({"msg": "API OK"}), 200
 
 import users
 import games
