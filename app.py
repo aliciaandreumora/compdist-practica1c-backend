@@ -49,8 +49,8 @@ def create_app():
     CORS(
     c_app,
     resources={r"/*": {"origins": [
-        "https://aliciaandreumora.github.io",  # 🔹 GitHub Pages
-        "http://localhost:5173",               # para pruebas locales
+        "https://aliciaandreumora.github.io",  # GitHub Pages
+        "http://localhost:5173",               # dev local
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
@@ -100,9 +100,13 @@ def logout_user():
     return resp
 
 
-@app.route('/register', methods=['POST'])
+
+@app.route('/register', methods=['POST', 'OPTIONS'])
 def register_user():
     print('REGISTER')
+    if request.method == "OPTIONS":
+        return make_response("", 204)
+
     data = request.get_json()
     username = data.get("username")
     password = data.get("password")
