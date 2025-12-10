@@ -41,23 +41,23 @@ def create_app():
 
     # Cookies JWT entre dominios (GitHub Pages -> Render)
     c_app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-    c_app.config["JWT_COOKIE_SECURE"] = True      # solo por HTTPS (Render usa HTTPS)
-    c_app.config["JWT_COOKIE_SAMESITE"] = "None"  # necesario para peticiones cross-site
+    c_app.config["JWT_COOKIE_SECURE"] = True      # requiere HTTPS (Render lo tiene)
+    c_app.config["JWT_COOKIE_SAMESITE"] = "None"  # permite cookies cross-site
     c_app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
     # 🔹 CORS: añadimos GitHub Pages
     CORS(
-        c_app,
-        resources={r"/*": {"origins": [
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:5174",
-            "https://aliciaandreumora.github.io",  # 👈 GitHub Pages
-        ]}},
-        supports_credentials=True,
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    c_app,
+    resources={r"/*": {"origins": [
+        "https://aliciaandreumora.github.io",  # 🔹 GitHub Pages
+        "http://localhost:5173",               # para pruebas locales
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ]}},
+    supports_credentials=True,
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
     )
 
 
