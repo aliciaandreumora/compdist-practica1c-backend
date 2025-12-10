@@ -36,14 +36,16 @@ def create_app():
     Bootstrap(c_app)
 
     # 🔹 Config JWT
+        # 🔹 Config JWT
     c_app.config["JWT_SECRET_KEY"] = getenv('JWT_SECRET_KEY', 'dev-jwt-secret')
+
+    # Cookies JWT entre dominios (GitHub Pages -> Render)
     c_app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-    c_app.config["JWT_COOKIE_SECURE"] = False  # en HTTPS/producción debería ser True
-    c_app.config["JWT_COOKIE_SAMESITE"] = "Lax"
+    c_app.config["JWT_COOKIE_SECURE"] = True      # solo por HTTPS (Render usa HTTPS)
+    c_app.config["JWT_COOKIE_SAMESITE"] = "None"  # necesario para peticiones cross-site
     c_app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
-    # 🔹 CORS: de momento dejamos los localhost.
-    # Más tarde añadimos tu GitHub Pages.
+    # 🔹 CORS: añadimos GitHub Pages
     CORS(
         c_app,
         resources={r"/*": {"origins": [
@@ -51,11 +53,13 @@ def create_app():
             "http://localhost:5174",
             "http://127.0.0.1:5173",
             "http://127.0.0.1:5174",
+            "https://aliciaandreumora.github.io",  # 👈 GitHub Pages
         ]}},
         supports_credentials=True,
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
     )
+
 
     jwt = JWTManager(c_app)
 
