@@ -87,9 +87,11 @@ def login_user():
     else:
         return jsonify({"msg": "Bad username or password"}), 401
 
-
 @app.post("/logout")
 def logout_user():
+    if request.method == "OPTIONS":
+        return make_response("", 204)
+
     print('LOGOUT')
     resp = jsonify({"msg": "logout ok"})
     unset_jwt_cookies(resp)
@@ -98,11 +100,11 @@ def logout_user():
 
 @app.route('/register', methods=['POST', 'OPTIONS'])
 def register_user():
-    print('REGISTER')
+    # Preflight CORS
     if request.method == "OPTIONS":
-        # respuesta vacía para el preflight
         return make_response("", 204)
 
+    print('REGISTER')
     data = request.get_json()
     username = data.get("username")
     password = data.get("password")
