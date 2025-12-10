@@ -46,13 +46,6 @@ def create_app():
     from flask_cors import CORS
     CORS(
         c_app,
-        origins=[
-            "https://aliciaandreumora.github.io",  # GitHub Pages
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5174",
-        ],
         supports_credentials=True,
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
@@ -97,14 +90,14 @@ def logout_user():
     unset_jwt_cookies(resp)
     return resp
 
-
 @app.route('/register', methods=['POST', 'OPTIONS'])
 def register_user():
-    # Preflight CORS
+    print('REGISTER')
+
+    # Responder al preflight CORS
     if request.method == "OPTIONS":
         return make_response("", 204)
 
-    print('REGISTER')
     data = request.get_json()
     username = data.get("username")
     password = data.get("password")
