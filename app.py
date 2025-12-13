@@ -58,6 +58,11 @@ def create_app():
 
 app, db = create_app()
 
+# Crear tablas si no existen (útil en Render con SQLite)
+with app.app_context():
+    from users import User
+    from games import Game  # si tienes un modelo Game
+    db.create_all()
 
 @app.route('/login', methods=['POST', 'OPTIONS'])
 def login_user():
@@ -90,14 +95,8 @@ def logout_user():
     unset_jwt_cookies(resp)
     return resp
 
-@app.route('/register', methods=['POST', 'OPTIONS'])
+@app.route('/register', methods=['POST'])
 def register_user():
-    print('REGISTER')
-
-    # Responder al preflight CORS
-    if request.method == "OPTIONS":
-        return make_response("", 204)
-
     data = request.get_json()
     username = data.get("username")
     password = data.get("password")
@@ -108,11 +107,9 @@ def register_user():
             access_token = create_access_token(identity=username)
             response = jsonify({"msg": f"User {username} registered and logged in"})
             set_access_cookies(response, access_token)
-            print("login response", response)
             return response
 
     return jsonify({"msg": "Registration not successful"}), 401
-
 
 @app.route('/delete_user', methods=['POST'])
 @jwt_required()
