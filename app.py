@@ -1,75 +1,142 @@
-from os import getenv, path
+from os import getenv
 from dotenv import load_dotenv
-from flask import Flask, redirect, request, make_response, jsonify
-from flask_bootstrap import Bootstrap
+from flask import Flask, request, make_response, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager, create_access_token, set_access_cookies,
     unset_jwt_cookies, jwt_required, get_jwt_identity
 )
-from extensions import db
-print("DB instance in app.py:", id(db))
+from sqlalchemy import text
+
+from extensions import db  # extensions.py debe tener: db = SQLAlchemy()
+
+import users
+import games
+
 
 def create_app():
-    basedir = path.abspath(path.dirname(__file__))
-    env_dir = path.join(basedir, '.env')
-    load_dotenv(env_dir)
+    load_dotenv()
 
-    c_app = Flask(__name__, static_url_path="/static")
+    app = Flask(__name__, static_url_path="/static")
 
-    # Clave secreta
-    c_app.secret_key = getenv('SECRET_KEY', 'dev-secret-key')
+    # Secret keys (ponlas en Render en Environment Variables)
+    app.config["SECRET_KEY"] = getenv("SECRET_KEY", "dev-secret-key")
+    app.config["JWT_SECRET_KEY"] = getenv("JWT_SECRET_KEY", "dev-jwt-secret")
 
-    # --------- BD ----------
-    db_url = getenv('DATABASE_URL') or getenv('SQLALCHEMY_DATABASE_URI')
+    # DB url (Render usa DATABASE_URL)
+    db_url = getenv("DATABASE_URL") or getenv("SQLALCHEMY_DATABASE_URI")
     if not db_url:
-        db_path = path.join(basedir, 'games.db')
-        db_url = 'sqlite:///' + db_path
+        # fallback local (SQLite)
+        db_url = "sqlite:///games.db"
 
-    c_app.config["SQLALCHEMY_DATABASE_URI"] = db_url
-    c_app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    db.init_app(c_app)
+    app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Bootstrap
-    Bootstrap(c_app)
+    db.init_app(app)
 
-    # --------- JWT ----------
-    c_app.config["JWT_SECRET_KEY"] = getenv('JWT_SECRET_KEY', 'dev-jwt-secret')
+    # JWT cookies (GitHub Pages -> Render: cross-site)
+    app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+    app.config["JWT_COOKIE_SECURE"] = True          # Render es HTTPS
+    app.config["JWT_COOKIE_SAMESITE"] = "None"      # permitir cross-site cookies
+    app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
-    # Cookies JWT entre dominios (GitHub Pages -> Render)
-    c_app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-    c_app.config["JWT_COOKIE_SECURE"] = True       # HTTPS (Render)
-    c_app.config["JWT_COOKIE_SAMESITE"] = "None"   # cross-site
-    c_app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+    # CORS
+    # Puedes controlar orígenes con env var FRONTEND_ORIGINS (comma-separated)
+    origins_env = getenv("FRONTEND_ORIGINS", "").strip()
+    default_origins = [
+        "https://aliciaandreumora.github.io",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ]
+    origins = [o.strip() for o in origins_env.split(",") if o.strip()] or default_origins
 
-    # --------- CORS ----------
-    from flask_cors import CORS
     CORS(
-        c_app,
+        app,
+        resources={r"/*": {"origins": origins}},
         supports_credentials=True,
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
     )
 
-    jwt = JWTManager(c_app)
-    return c_app, db
+    JWTManager(app)
+
+    # ✅ CREAR TABLAS (porque NO usas modelos SQLAlchemy)
+    with app.app_context():
+        init_db_tables()
+
+    return app
 
 
+def init_db_tables():
+    """Crea tablas users y games si no existen (Postgres o SQLite)."""
+    dialect = db.engine.dialect.name  # 'postgresql' o 'sqlite' etc.
 
-app, db = create_app()
-with app.app_context():
-    db.create_all()
+    if dialect == "sqlite":
+        users_sql = """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
+        );
+        """
+        games_sql = """
+        CREATE TABLE IF NOT EXISTS games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            year INTEGER,
+            description TEXT,
+            img TEXT,
+            url TEXT,
+            play TEXT
+        );
+        """
+    else:
+        # PostgreSQL (Render)
+        users_sql = """
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
+        );
+        """
+        games_sql = """
+        CREATE TABLE IF NOT EXISTS games (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            year INTEGER,
+            description TEXT,
+            img TEXT,
+            url TEXT,
+            play TEXT
+        );
+        """
+
+    db.session.execute(text(users_sql))
+    db.session.execute(text(games_sql))
+    db.session.commit()
 
 
-@app.route('/login', methods=['POST', 'OPTIONS'])
+app = create_app()
+
+
+@app.get("/")
+def index():
+    return jsonify({"msg": "API OK"}), 200
+
+
+@app.route("/login", methods=["POST", "OPTIONS"])
 def login_user():
     if request.method == "OPTIONS":
-        response = make_response("", 204)
-        return response
+        return make_response("", 204)
 
-    data = request.get_json()
+    data = request.get_json() or {}
     username = data.get("username")
     password = data.get("password")
+
+    if not username or not password:
+        return jsonify({"msg": "Missing username or password"}), 400
 
     user_ok = users.login(username, password)
 
@@ -77,117 +144,104 @@ def login_user():
         access_token = create_access_token(identity=username)
         response = jsonify({"msg": "logged in"})
         set_access_cookies(response, access_token)
-        print("login response", response)
         return response
-    else:
-        return jsonify({"msg": "Bad username or password"}), 401
 
-@app.post("/logout")
+    return jsonify({"msg": "Bad username or password"}), 401
+
+
+@app.route("/logout", methods=["POST", "OPTIONS"])
 def logout_user():
     if request.method == "OPTIONS":
         return make_response("", 204)
 
-    print('LOGOUT')
     resp = jsonify({"msg": "logout ok"})
     unset_jwt_cookies(resp)
     return resp
 
-@app.route('/register', methods=['POST', 'OPTIONS'])
-def register_user():
-    print('REGISTER')
 
-    # Responder al preflight CORS
+@app.route("/register", methods=["POST", "OPTIONS"])
+def register_user():
     if request.method == "OPTIONS":
         return make_response("", 204)
 
-    data = request.get_json()
+    data = request.get_json() or {}
     username = data.get("username")
     password = data.get("password")
 
-    if username and password:
-        register_ok = users.register(username, password)
-        if register_ok:
-            access_token = create_access_token(identity=username)
-            response = jsonify({"msg": f"User {username} registered and logged in"})
-            set_access_cookies(response, access_token)
-            print("login response", response)
-            return response
+    if not username or not password:
+        return jsonify({"msg": "Missing username or password"}), 400
 
-    return jsonify({"msg": "Registration not successful"}), 401
+    register_ok = users.register(username, password)
+    if register_ok:
+        access_token = create_access_token(identity=username)
+        response = jsonify({"msg": f"User {username} registered and logged in"})
+        set_access_cookies(response, access_token)
+        return response
+
+    return jsonify({"msg": "Registration not successful"}), 409
 
 
-@app.route('/delete_user', methods=['POST'])
-@jwt_required()
+@app.route("/delete_user", methods=["POST", "OPTIONS"])
+@jwt_required(optional=False)
 def delete_user():
+    if request.method == "OPTIONS":
+        return make_response("", 204)
+
     username = get_jwt_identity()
     deletion_ok = users.delete_user(username)
+
     if deletion_ok:
         response = jsonify({"msg": f"User {username} deleted"})
         unset_jwt_cookies(response)
         return response, 200
 
-    return jsonify({"msg": f"Deletion of user {username} not successful"}), 401
+    return jsonify({"msg": f"Deletion of user {username} not successful"}), 400
 
 
-@app.route("/me", methods=["GET"])
-@jwt_required()
+@app.route("/me", methods=["GET", "OPTIONS"])
+@jwt_required(optional=False)
 def me():
+    if request.method == "OPTIONS":
+        return make_response("", 204)
     return jsonify({"user": get_jwt_identity()}), 200
 
 
-#@app.route("/protected", methods=["GET"])
-#@jwt_required()
-#def protected():
-#    print("PROTECTED ENTERED")
-#    current_user = get_jwt_identity()
-#    return jsonify({"user": current_user}), 200
-
-
-@app.route("/api/juegos", methods=["GET"])
-@jwt_required()
+@app.route("/api/juegos", methods=["GET", "OPTIONS"])
+@jwt_required(optional=False)
 def listar_juegos():
+    if request.method == "OPTIONS":
+        return make_response("", 204)
     ret, codigo = games.listar_juegos()
     return ret, codigo
 
 
 @app.route("/api/juegos", methods=["POST", "OPTIONS"])
-@jwt_required()
+@jwt_required(optional=False)
 def crear_juego():
-    print("CREAR JUEGO", 1)
     if request.method == "OPTIONS":
-        response = make_response("", 204)
-        return response
+        return make_response("", 204)
 
-    print("CREAR JUEGO", 2)
-    data = request.json
-    print(data)
     ret, codigo = games.crear_juego(request)
-    print("CREAR JUEGO", 3)
-    print(ret, codigo)
     return ret, codigo
 
 
-@app.route("/api/juegos/<int:id>", methods=["PUT"])
-@jwt_required()
+@app.route("/api/juegos/<int:id>", methods=["PUT", "OPTIONS"])
+@jwt_required(optional=False)
 def editar_juego(id):
-    data = request.json
+    if request.method == "OPTIONS":
+        return make_response("", 204)
     ret, codigo = games.editar_juego(id, request)
     return ret, codigo
 
 
-@app.route("/api/juegos/<int:id>", methods=["DELETE"])
-@jwt_required()
+@app.route("/api/juegos/<int:id>", methods=["DELETE", "OPTIONS"])
+@jwt_required(optional=False)
 def eliminar_juego(id):
+    if request.method == "OPTIONS":
+        return make_response("", 204)
     ret, codigo = games.eliminar_juego(id)
     return ret, codigo
 
-@app.route("/")
-def index():
-    return jsonify({"msg": "API OK"}), 200
 
-import users
-import games
-
-
-if __name__ == '__main__':
-    app.run()
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000, debug=True)
