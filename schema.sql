@@ -1,10 +1,10 @@
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
-    username VARCHAR(48),
-    password TEXT
+    username VARCHAR(48) UNIQUE,
+    password TEXT NOT NULL
 );
 
-CREATE TABLE games (
+CREATE TABLE IF NOT EXISTS games (
     id SERIAL PRIMARY KEY,
     name VARCHAR(48),
     year INT,
@@ -13,4 +13,3 @@ CREATE TABLE games (
     url TEXT,
     play TEXT
 );
-

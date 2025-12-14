@@ -1,34 +1,55 @@
+from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import text
 from extensions import db
 
-
-def login(username, password) -> bool:
-    sql = text("SELECT id, username, password FROM users WHERE username=:username")
-    row = db.session.execute(sql, {"username": username}).fetchone()
-    if not row:
-        return False
-    return row[2] == password
-
-
-def register(username, password) -> bool:
-    sql = text("SELECT id, username FROM users WHERE username=:username")
-    row = db.session.execute(sql, {"username": username}).fetchone()
-    if row:
+def register(username: str, password: str) -> bool:
+    username = (username or "").strip()
+    password = (password or "").strip()
+    if not username or not password:
         return False
 
-    ins = text("INSERT INTO users (username, password) VALUES (:username, :password)")
-    db.session.execute(ins, {"username": username, "password": password})
+    exists = db.session.execute(
+        text("SELECT id FROM users WHERE username=:u"),
+        {"u": username}
+    ).fetchone()
+
+    if exists:
+        return False
+
+    pwd_hash = generate_password_hash(password)
+    db.session.execute(
+        text("INSERT INTO users (username, password) VALUES (:u, :p)"),
+        {"u": username, "p": pwd_hash}
+    )
     db.session.commit()
     return True
 
 
-def delete_user(username) -> bool:
-    sql = text("SELECT id FROM users WHERE username=:username")
-    row = db.session.execute(sql, {"username": username}).fetchone()
+def login(username: str, password: str) -> bool:
+    username = (username or "").strip()
+    password = (password or "").strip()
+    if not username or not password:
+        return False
+
+    row = db.session.execute(
+        text("SELECT password FROM users WHERE username=:u"),
+        {"u": username}
+    ).fetchone()
+
     if not row:
         return False
 
-    del_sql = text("DELETE FROM users WHERE username=:username")
-    db.session.execute(del_sql, {"username": username})
+    return check_password_hash(row[0], password)
+
+
+def delete_user(username: str) -> bool:
+    username = (username or "").strip()
+    if not username:
+        return False
+
+    db.session.execute(
+        text("DELETE FROM users WHERE username=:u"),
+        {"u": username}
+    )
     db.session.commit()
     return True
