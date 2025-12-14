@@ -5,9 +5,7 @@ from extensions import db
 
 def listar_juegos():
     sql = text("""
-        SELECT id, name, year, description, img, url, play
-        FROM games
-        ORDER BY id ASC
+        SELECT id, name, year, description, img, url, play FROM games
     """)
     rows = db.session.execute(sql).fetchall()
     data = [
@@ -51,19 +49,11 @@ def crear_juego(request):
         db.session.commit()
         new_id = row[0] if row else None
         return jsonify({"msg": "created", "id": new_id}), 201
-    except Exception:
+    except Exception as e:
         db.session.rollback()
-        # fallback (por si alguna sqlite antigua no soporta RETURNING)
-        sql2 = text("""
-            INSERT INTO games (name, year, description, img, url, play)
-            VALUES (:name, :year, :description, :img, :url, :play)
-        """)
-        db.session.execute(sql2, {
-            "name": name, "year": year, "description": description,
-            "img": img, "url": url, "play": play
-        })
-        db.session.commit()
-        return jsonify({"msg": "created"}), 201
+        print("ERROR crear_juego:", repr(e))
+        return jsonify({"msg": "db error", "error": str(e)}), 500
+
 
 
 def editar_juego(id, request):
