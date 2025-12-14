@@ -1,122 +1,165 @@
-from os import getenv, path
-from dotenv import load_dotenv
+from os import getenv
 from flask import Flask, request, make_response, jsonify
-from flask_bootstrap import Bootstrap
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager, create_access_token, set_access_cookies,
     unset_jwt_cookies, jwt_required, get_jwt_identity
 )
+from sqlalchemy import text
+from datetime import timedelta
 from extensions import db
 
-import users
-import games
 
-
-def _normalize_db_url(url: str) -> str:
-    # Render a veces da postgres://... y SQLAlchemy prefiere postgresql://...
-    if url and url.startswith("postgres://"):
-        return "postgresql://" + url[len("postgres://"):]
+def normalize_db_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    # Render a veces da postgres:// y SQLAlchemy quiere postgresql://
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql://", 1)
     return url
 
 
-def init_db(app: Flask):
-    """Crea tablas ejecutando schema.sql (idempotente)."""
-    schema_path = path.join(path.abspath(path.dirname(__file__)), "schema.sql")
-    with app.app_context():
-        if path.exists(schema_path):
-            with open(schema_path, "r", encoding="utf-8") as f:
-                sql = f.read()
-            # Ojo: con psycopg2, múltiples statements funcionan con autocommit de conexión
-            conn = db.engine.raw_connection()
-            try:
-                conn.autocommit = True
-                cur = conn.cursor()
-                cur.execute(sql)
-                cur.close()
-            finally:
-                conn.close()
+def ensure_tables_and_migrate():
+    """
+    Como usas SQL manual (text), create_all() NO crea nada.
+    Aquí:
+      - crea users y games si no existen
+      - si games tiene columna "desc", la renombra a description
+      - añade url y play si faltan
+    """
+    engine_name = db.engine.dialect.name  # 'postgresql' o 'sqlite'
+
+    if engine_name == "postgresql":
+        # 1) Crear tablas si no existen (ESQUEMA CORRECTO)
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            );
+        """))
+
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS games (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                year INT,
+                description TEXT,
+                img TEXT,
+                url TEXT,
+                play TEXT
+            );
+        """))
+
+        # 2) Migración: si existe "desc" y no existe description -> renombrar
+        db.session.execute(text("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='games' AND column_name='desc'
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='games' AND column_name='description'
+            )
+            THEN
+                ALTER TABLE games RENAME COLUMN "desc" TO description;
+            END IF;
+        END $$;
+        """))
+
+        # 3) Añadir columnas si faltan
+        db.session.execute(text("""ALTER TABLE games ADD COLUMN IF NOT EXISTS url TEXT;"""))
+        db.session.execute(text("""ALTER TABLE games ADD COLUMN IF NOT EXISTS play TEXT;"""))
+        db.session.execute(text("""ALTER TABLE games ADD COLUMN IF NOT EXISTS img TEXT;"""))
+        db.session.execute(text("""ALTER TABLE games ADD COLUMN IF NOT EXISTS description TEXT;"""))
+
+        db.session.commit()
+
+    else:
+        # SQLITE (local). Si vienes de una tabla antigua, lo más limpio es borrar games.db y recrear.
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            );
+        """))
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS games (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                year INTEGER,
+                description TEXT,
+                img TEXT,
+                url TEXT,
+                play TEXT
+            );
+        """))
+        db.session.commit()
 
 
 def create_app():
-    basedir = path.abspath(path.dirname(__file__))
-    load_dotenv(path.join(basedir, ".env"))
-
     app = Flask(__name__, static_url_path="/static")
 
     # Secret keys
     app.secret_key = getenv("SECRET_KEY", "dev-secret-key")
     app.config["JWT_SECRET_KEY"] = getenv("JWT_SECRET_KEY", "dev-jwt-secret")
 
-    # DB URL (Render: DATABASE_URL)
-    db_url = getenv("DATABASE_URL") or getenv("SQLALCHEMY_DATABASE_URI")
-    if not db_url:
-        db_path = path.join(basedir, "games.db")
-        db_url = "sqlite:///" + db_path
+    # (Opcional) alargar expiración para no estar logueándote cada 15 min
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=2)
 
-    app.config["SQLALCHEMY_DATABASE_URI"] = _normalize_db_url(db_url)
+    # DB
+    db_url = normalize_db_url(getenv("DATABASE_URL") or getenv("SQLALCHEMY_DATABASE_URI"))
+    if not db_url:
+        db_url = "sqlite:///games.db"
+
+    app.config["SQLALCHEMY_DATABASE_URI"] = db_url
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     db.init_app(app)
 
-    # Bootstrap (si lo usas en templates)
-    Bootstrap(app)
-
-    # JWT en cookies (para GH Pages -> Render)
+    # JWT cookies cross-site (GitHub Pages -> Render)
     app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-    app.config["JWT_COOKIE_SECURE"] = getenv("JWT_COOKIE_SECURE", "true").lower() == "true"
-    app.config["JWT_COOKIE_SAMESITE"] = "None"
+    app.config["JWT_COOKIE_SECURE"] = True      # en Render siempre HTTPS
+    app.config["JWT_COOKIE_SAMESITE"] = "None"  # permite cross-site cookies
     app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
-    JWTManager(app)
-
-    # CORS con credenciales
-    # Pon FRONTEND_ORIGIN en Render: https://aliciaandreumora.github.io
-    frontend_origin = getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-    origins = [
-        frontend_origin,
+    # CORS
+    allowed_origins = [
+        "https://aliciaandreumora.github.io",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ]
     CORS(
         app,
-        origins=origins,
+        origins=allowed_origins,
         supports_credentials=True,
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
     )
 
-    # Crear tablas en Postgres/SQLite
-    init_db(app)
+    JWTManager(app)
+
+    # Crear tablas + migración
+    with app.app_context():
+        ensure_tables_and_migrate()
 
     return app
 
 
 app = create_app()
 
+# IMPORTS después de crear app/db
+import users
+import games
+
 
 @app.route("/", methods=["GET"])
 def index():
     return jsonify({"msg": "API OK"}), 200
-
-
-@app.route("/register", methods=["POST", "OPTIONS"])
-def register_user():
-    if request.method == "OPTIONS":
-        return make_response("", 204)
-
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-    password = data.get("password")
-
-    if users.register(username, password):
-        access_token = create_access_token(identity=username)
-        resp = jsonify({"msg": f"User {username} registered and logged in"})
-        set_access_cookies(resp, access_token)
-        return resp, 200
-
-    return jsonify({"msg": "Registration not successful"}), 401
 
 
 @app.route("/login", methods=["POST", "OPTIONS"])
@@ -128,13 +171,17 @@ def login_user():
     username = data.get("username")
     password = data.get("password")
 
-    if users.login(username, password):
-        access_token = create_access_token(identity=username)
-        resp = jsonify({"msg": "logged in"})
-        set_access_cookies(resp, access_token)
-        return resp, 200
+    if not username or not password:
+        return jsonify({"msg": "Missing username or password"}), 400
 
-    return jsonify({"msg": "Bad username or password"}), 401
+    user_ok = users.login(username, password)
+    if not user_ok:
+        return jsonify({"msg": "Bad username or password"}), 401
+
+    access_token = create_access_token(identity=username)
+    resp = jsonify({"msg": "logged in"})
+    set_access_cookies(resp, access_token)
+    return resp, 200
 
 
 @app.route("/logout", methods=["POST", "OPTIONS"])
@@ -147,28 +194,58 @@ def logout_user():
     return resp, 200
 
 
-@app.route("/me", methods=["GET"])
+@app.route("/register", methods=["POST", "OPTIONS"])
+def register_user():
+    if request.method == "OPTIONS":
+        return make_response("", 204)
+
+    data = request.get_json(silent=True) or {}
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return jsonify({"msg": "Missing username or password"}), 400
+
+    register_ok, msg = users.register(username, password)
+    if not register_ok:
+        return jsonify({"msg": msg}), 409
+
+    access_token = create_access_token(identity=username)
+    resp = jsonify({"msg": f"User {username} registered and logged in"})
+    set_access_cookies(resp, access_token)
+    return resp, 200
+
+
+@app.route("/me", methods=["GET", "OPTIONS"])
 @jwt_required()
 def me():
+    if request.method == "OPTIONS":
+        return make_response("", 204)
     return jsonify({"user": get_jwt_identity()}), 200
 
 
-@app.route("/delete_user", methods=["POST"])
+@app.route("/delete_user", methods=["POST", "OPTIONS"])
 @jwt_required()
 def delete_user():
+    if request.method == "OPTIONS":
+        return make_response("", 204)
+
     username = get_jwt_identity()
     if users.delete_user(username):
         resp = jsonify({"msg": f"User {username} deleted"})
         unset_jwt_cookies(resp)
         return resp, 200
-    return jsonify({"msg": f"Deletion of user {username} not successful"}), 401
+
+    return jsonify({"msg": "Deletion not successful"}), 400
 
 
-@app.route("/api/juegos", methods=["GET"])
+# Juegos
+@app.route("/api/juegos", methods=["GET", "OPTIONS"])
 @jwt_required()
 def listar_juegos():
-    ret, code = games.listar_juegos()
-    return jsonify(ret), code
+    if request.method == "OPTIONS":
+        return make_response("", 204)
+    return games.listar_juegos()
 
 
 @app.route("/api/juegos", methods=["POST", "OPTIONS"])
@@ -176,27 +253,24 @@ def listar_juegos():
 def crear_juego():
     if request.method == "OPTIONS":
         return make_response("", 204)
-    ret, code = games.crear_juego(request)
-    return jsonify(ret), code
+    return games.crear_juego(request)
 
 
-@app.route("/api/juegos/<int:game_id>", methods=["PUT", "OPTIONS"])
+@app.route("/api/juegos/<int:id>", methods=["PUT", "OPTIONS"])
 @jwt_required()
-def editar_juego(game_id):
+def editar_juego(id):
     if request.method == "OPTIONS":
         return make_response("", 204)
-    ret, code = games.editar_juego(game_id, request)
-    return jsonify(ret), code
+    return games.editar_juego(id, request)
 
 
-@app.route("/api/juegos/<int:game_id>", methods=["DELETE", "OPTIONS"])
+@app.route("/api/juegos/<int:id>", methods=["DELETE", "OPTIONS"])
 @jwt_required()
-def eliminar_juego(game_id):
+def eliminar_juego(id):
     if request.method == "OPTIONS":
         return make_response("", 204)
-    ret, code = games.eliminar_juego(game_id)
-    return jsonify(ret), code
+    return games.eliminar_juego(id)
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
